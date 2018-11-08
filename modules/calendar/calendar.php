@@ -85,13 +85,12 @@ class EF_Calendar extends EF_Module {
 
 		// Define the create-post capability
 		$this->create_post_cap = apply_filters( 'ef_calendar_create_post_cap', 'edit_posts' );
-		
-		require_once( EDIT_FLOW_ROOT . '/common/php/' . 'screen-options.php' );
-		add_screen_options_panel( self::usermeta_key_prefix . 'screen_options', __( 'Calendar Options', 'edit-flow' ), array( $this, 'generate_screen_options' ), self::screen_id, false, true );
+
+		add_action( 'admin_init', array( $this, 'add_screen_options_panel' ) );
 		add_action( 'admin_init', array( $this, 'handle_save_screen_options' ) );
 		
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
-		add_action( 'admin_menu', array( $this, 'action_admin_menu' ) );		
+		add_action( 'admin_menu', array( $this, 'action_admin_menu' ) );
 		add_action( 'admin_print_styles', array( $this, 'add_admin_styles' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 		
@@ -245,6 +244,16 @@ class EF_Calendar extends EF_Module {
 	}
 	
 	/**
+	 * Add module options to the screen panel
+	 *
+	 * @since 0.8.3
+	 */
+	function add_screen_options_panel() {
+		require_once( EDIT_FLOW_ROOT . '/common/php/' . 'screen-options.php' );
+		add_screen_options_panel( self::usermeta_key_prefix . 'screen_options', __( 'Calendar Options', 'edit-flow' ), array( $this, 'generate_screen_options' ), self::screen_id, false, true );		
+	}
+	
+	/**
 	 * Handle the request to save the screen options
 	 *
 	 * @since 0.7
@@ -385,7 +394,7 @@ class EF_Calendar extends EF_Module {
 					$start_date    = self::ics_format_time( $post->post_date );
 					$end_date      = self::ics_format_time( $post->post_date, 5 * MINUTE_IN_SECONDS );
 					$last_modified = self::ics_format_time( $post->post_modified );
-
+					$post_status_obj = get_post_status_object( get_post_status( $post->ID ) );
 					// Remove the convert chars and wptexturize filters from the title
 					remove_filter( 'the_title', 'convert_chars' );
 					remove_filter( 'the_title', 'wptexturize' );
@@ -393,7 +402,7 @@ class EF_Calendar extends EF_Module {
 					$formatted_post = array(
 						'BEGIN'           => 'VEVENT',
 						'UID'             => $post->guid,
-						'SUMMARY'         => $this->do_ics_escaping( apply_filters( 'the_title', $post->post_title ) ) . ' - ' . $this->get_post_status_friendly_name( get_post_status( $post->ID ) ),
+						'SUMMARY'         => $this->do_ics_escaping( apply_filters( 'the_title', $post->post_title ) ) . ' - ' . $post_status_obj->label,
 						'DTSTART'         => $start_date,
 						'DTEND'           => $end_date,
 						'LAST-MODIFIED'   => $last_modified,
@@ -782,10 +791,14 @@ class EF_Calendar extends EF_Module {
 						$this->hidden = 0;
 						if ( !empty( $week_posts[$week_single_date] ) ) {
 
-							$week_posts[$week_single_date] = apply_filters( 'ef_calendar_posts_for_week', $week_posts[$week_single_date] );
+							$week_posts[$week_single_date] = apply_filters( 'ef_calendar_posts_for_week', $week_posts[$week_single_date], $week_single_date );
 
-							foreach ( $week_posts[$week_single_date] as $num => $post ){ 
-								echo $this->generate_post_li_html( $post, $week_single_date, $num ); 
+							foreach ( $week_posts[$week_single_date] as $num => $post ) {
+								$output = apply_filters( 'ef_pre_calendar_single_date_item_html', '', $this, $num, $post, $week_single_date );
+								if ( ! $output ) {
+									$output = $this->generate_post_li_html( $post, $week_single_date, $num );
+								}
+								echo $output;
 							} 
 
 						 } 
@@ -856,6 +869,7 @@ class EF_Calendar extends EF_Module {
 		ob_start();
 		$post_id = $post->ID;
 		$edit_post_link = get_edit_post_link( $post_id );
+		$status_object = get_post_status_object( get_post_status( $post_id ) );
 		
 		$post_classes = array(
 			'day-item',
@@ -884,7 +898,7 @@ class EF_Calendar extends EF_Module {
 			<div style="clear:right;"></div>
 			<div class="item-static">
 				<div class="item-default-visible">
-					<div class="item-status"><span class="status-text"><?php echo esc_html__( $this->get_post_status_friendly_name( get_post_status( $post_id ) ), 'edit-flow' ); ?></span></div>
+					<div class="item-status"><span class="status-text"><?php echo esc_html( $status_object->label ); ?></span></div>
 					<div class="inner">
 						<span class="item-headline post-title"><strong><?php echo esc_html( _draft_or_post_title( $post->ID ) ); ?></strong></span>
 					</div>
@@ -1213,17 +1227,17 @@ class EF_Calendar extends EF_Module {
 						 
 		$args = array_merge( $defaults, $args );
 		
-		// Unpublished as a status is just an array of everything but 'publish'
-		if ( $args['post_status'] == 'unpublish' ) {
+		// Unpublished as a status is just an array of everything but 'publish'.
+		if ( 'unpublish' == $args['post_status'] ) {
 			$args['post_status'] = '';
-			$post_statuses = $this->get_post_statuses();
-			foreach ( $post_statuses as $post_status ) {
-				$args['post_status'] .= $post_status->slug . ', ';
+			$post_stati = get_post_stati();
+			unset($post_stati['inherit'], $post_stati['auto-draft'], $post_stati['trash'], $post_stati['publish'] );
+			if ( ! apply_filters( 'ef_show_scheduled_as_unpublished', false ) ) {
+				unset( $post_stati['future'] );
 			}
-			$args['post_status'] = rtrim( $args['post_status'], ', ' );
-			// Optional filter to include scheduled content as unpublished
-			if ( apply_filters( 'ef_show_scheduled_as_unpublished', false ) )
-				$args['post_status'] .= ', future';
+			foreach ( $post_stati as $post_status ) {
+				$args['post_status'] .= $post_status . ', ';
+			}
 		}
 		// The WP functions for printing the category and author assign a value of 0 to the default
 		// options, but passing this to the query is bad (trashed and auto-draft posts appear!), so
@@ -1296,23 +1310,23 @@ class EF_Calendar extends EF_Module {
 	
 	/**
 	 * Given a day in string format, returns the day at the beginning of that week, which can be the given date.
-	 * The end of the week is determined by the blog option, 'start_of_week'.
+	 * The beginning of the week is determined by the blog option, 'start_of_week'.
 	 *
 	 * @see http://www.php.net/manual/en/datetime.formats.date.php for valid date formats
 	 *
 	 * @param string $date String representing a date
-	 * @param string $format Date format in which the end of the week should be returned
+	 * @param string $format Date format in which the beginning of the week should be returned
 	 * @param int $week Number of weeks we're offsetting the range	
-	 * @return string $formatted_start_of_week End of the week
+	 * @return string $formatted_start_of_week Beginning of the week
 	 */
 	function get_beginning_of_week( $date, $format = 'Y-m-d', $week = 1 ) {
 
 		$date = strtotime( $date );
 		$start_of_week = get_option( 'start_of_week' );
 		$day_of_week = date( 'w', $date );
-		$date += (( $start_of_week - $day_of_week - 7 ) % 7) * 60 * 60 * 24 * $week;
-		$additional = 3600 * 24 * 7 * ( $week - 1 );
-		$formatted_start_of_week = date( $format, $date + $additional );
+		$date += (( $start_of_week - $day_of_week - 7 ) % 7) * 60 * 60 * 24 ;
+		$date = strtotime ( '+' . ( $week - 1 ) . ' week', $date ) ;
+                $formatted_start_of_week = date( $format, $date );
 		return $formatted_start_of_week;
 		
 	}
@@ -1334,8 +1348,8 @@ class EF_Calendar extends EF_Module {
 		$end_of_week = get_option( 'start_of_week' ) - 1;
 		$day_of_week = date( 'w', $date );
 		$date += (( $end_of_week - $day_of_week + 7 ) % 7) * 60 * 60 * 24;
-		$additional = 3600 * 24 * 7 * ( $week - 1 );
-		$formatted_end_of_week = date( $format, $date + $additional );
+		$date = strtotime ( '+' . ( $week - 1 ) . ' week', $date ) ;
+		$formatted_end_of_week = date( $format, $date );
 		return $formatted_end_of_week;
 		
 	}
@@ -1683,10 +1697,9 @@ class EF_Calendar extends EF_Module {
 		switch( $key ) {
 			case 'post_status':
 				// Whitelist-based validation for this parameter
-				$valid_statuses = wp_list_pluck( $this->get_post_statuses(), 'slug' );
-				$valid_statuses[] = 'future';
+				$valid_statuses = get_post_stati();
 				$valid_statuses[] = 'unpublish';
-				$valid_statuses[] = 'publish';
+				unset( $valid_statuses['inherit'], $valid_statuses['auto-draft'], $valid_statuses['trash'] );
 				if ( in_array( $dirty_value, $valid_statuses ) )
 					return $dirty_value;
 				else
@@ -1716,18 +1729,19 @@ class EF_Calendar extends EF_Module {
 	function calendar_filter_options( $select_id, $select_name, $filters ) {
 		switch( $select_id ){ 
 			case 'post_status':
-				$post_statuses = $this->get_post_statuses();
+				$post_stati = get_post_stati();
+				unset( $post_stati['inherit'], $post_stati['auto-draft'], $post_stati['trash'] );
 			?>
 				<select id="<?php echo $select_id; ?>" name="<?php echo $select_name; ?>" >
 					<option value=""><?php _e( 'View all statuses', 'edit-flow' ); ?></option>
 					<?php 
-						foreach ( $post_statuses as $post_status ) { 
-							echo "<option value='" . esc_attr( $post_status->slug ) . "' " . selected( $post_status->slug, $filters['post_status'] ) . ">" . esc_html( $post_status->name ) . "</option>";
+						foreach ( $post_stati as $post_status ) { 
+							$value = $post_status;
+							$status = get_post_status_object($post_status);
+							echo "<option value='" . esc_attr( $value ) . "' " . selected( $value, $filters['post_status'] ) . ">" . esc_html( $status->label ) . "</option>";
 						}
 					?>
-					<option value="future" <?php selected( 'future', $filters['post_status'] ) ?> > <?php echo __( 'Scheduled', 'edit-flow' ) ?> </option>
 					<option value="unpublish" <?php selected( 'unpublish', $filters['post_status'] ) ?> > <?php echo __( 'Unpublished', 'edit-flow' ) ?> </option>
-					<option value="publish" <?php selected( 'publish', $filters['post_status'] ) ?> > <?php echo __( 'Published', 'edit-flow' ) ?> </option>
 				</select>
 				<?php
 			break;

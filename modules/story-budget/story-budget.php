@@ -65,13 +65,9 @@ class EF_Story_Budget extends EF_Module {
 
 		// Filter to allow users to pick a taxonomy other than 'category' for sorting their posts
 		$this->taxonomy_used = apply_filters( 'ef_story_budget_taxonomy_used', $this->taxonomy_used );
-		
+
 		add_action( 'admin_init', array( $this, 'handle_form_date_range_change' ) );
-		
-		include_once( EDIT_FLOW_ROOT . '/common/php/' . 'screen-options.php' );
-		if ( function_exists( 'add_screen_options_panel' ) )
-			add_screen_options_panel( self::usermeta_key_prefix . 'screen_columns', __( 'Screen Layout', 'edit-flow' ), array( $this, 'print_column_prefs' ), self::screen_id, array( $this, 'save_column_prefs' ), true );
-		
+		add_action( 'admin_init', array( $this, 'add_screen_options_panel' ) );
 		// Register the columns of data appearing on every term. This is hooked into admin_init
 		// so other Edit Flow modules can register their filters if needed
 		add_action( 'admin_init', array( $this, 'register_term_columns' ) );
@@ -228,6 +224,16 @@ class EF_Story_Budget extends EF_Module {
 	}
 	
 	/**
+	 * Add module options to the screen panel
+	 *
+	 * @since 0.8.3
+	 */
+	function add_screen_options_panel() {
+		require_once( EDIT_FLOW_ROOT . '/common/php/' . 'screen-options.php' );
+		add_screen_options_panel( self::usermeta_key_prefix . 'screen_columns', __( 'Screen Layout', 'edit-flow' ), array( $this, 'print_column_prefs' ), self::screen_id, array( $this, 'save_column_prefs' ), true );
+	}
+	
+	/**
 	 * Print column number preferences for screen options
 	 */
 	function print_column_prefs() {
@@ -284,23 +290,25 @@ class EF_Story_Budget extends EF_Module {
 			<?php $this->print_messages(); ?>
 			<?php $this->table_navigation(); ?>
 			<div class="metabox-holder">
-			<?php
-				// Handle the calculation of terms to postbox-containers
-				$terms_per_container = ceil( count( $terms ) / $this->num_columns );
-				$term_index = 0;
-				// Show just one column if we've filtered to one term
-				if ( count( $this->terms ) == 1 )
-					$this->num_columns = 1;
-				for( $i = 1; $i <= $this->num_columns; $i++ ) {
-					echo '<div class="postbox-container" style="width:' . ( 100 / $this->num_columns ) . '%;">';
-					for( $j = 0; $j < $terms_per_container; $j++ ) {
-						if ( isset( $this->terms[$term_index] ) )
-							$this->print_term( $this->terms[$term_index] );
-						$term_index++;
+				<?php
+					echo '<div class="postbox-container columns-number-' . absint( $this->num_columns ) . '">';
+					foreach( (array) $this->terms as $term ) {
+						$this->print_term( $term );
 					}
+
 					echo '</div>';
-				}
-			?>
+				?>
+				<style>
+					<?php
+					  for ( $i = 1; $i <= $this->max_num_columns; ++$i ) {
+						?>
+					.columns-number-<?php echo (int) $i; ?> .postbox {
+						flex-basis: <?php echo  99 / $i ?>%;
+					}
+					<?php
+				  }
+				?>
+				</style>
 			</div>
 		</div>
 		<?php
@@ -369,19 +377,19 @@ class EF_Story_Budget extends EF_Module {
 			),
 		);
 
-		// Unpublished as a status is just an array of everything but 'publish'
-		if ( $args['post_status'] == 'unpublish' ) {
+		// Unpublished as a status is just an array of everything but 'publish'.
+		if ( 'unpublish' == $args['post_status'] ) {
 			$args['post_status'] = '';
-			$post_statuses = $this->get_post_statuses();
-			foreach ( $post_statuses as $post_status ) {
-				$args['post_status'] .= $post_status->slug . ', ';
+			$post_stati = get_post_stati();
+			unset( $post_stati['inherit'], $post_stati['auto-draft'], $post_stati['trash'], $post_stati['publish'] );
+			if ( ! apply_filters( 'ef_show_scheduled_as_unpublished', false ) ) {
+				unset( $post_stati['future'] );
 			}
-			$args['post_status'] = rtrim( $args['post_status'], ', ' );
-			// Optional filter to include scheduled content as unpublished
-			if ( apply_filters( 'ef_show_scheduled_as_unpublished', false ) )
-				$args['post_status'] .= ', future';
+			foreach ( $post_stati as $post_status ) {
+				$args['post_status'] .= $post_status . ', ';
+			}
 		}
-		
+
 		// Filter by post_author if it's set
 		if ( $args['author'] === '0' ) unset( $args['author'] );
 
@@ -497,8 +505,8 @@ class EF_Story_Budget extends EF_Module {
 			
 		switch( $column_name ) {
 			case 'status':
-				$status_name = $this->get_post_status_friendly_name( $post->post_status );
-				return $status_name;
+				$status_name = get_post_status_object( $post->post_status );
+				return $status_name->label;
 				break;
 			case 'author':
 				$post_author = get_userdata( $post->post_author );
@@ -510,8 +518,7 @@ class EF_Story_Budget extends EF_Module {
 				return $output;
 				break;
 			case 'post_modified':
-				$modified_time_gmt = strtotime( $post->post_modified_gmt . " GMT" );
-				return $this->timesince( $modified_time_gmt );
+				return sprintf( esc_html__( '%s ago', 'edit-flow' ), human_time_diff( get_the_time( 'U', $post->ID ), current_time( 'timestamp' ) ) );
 				break;
 			default:
 				break;
@@ -716,17 +723,18 @@ class EF_Story_Budget extends EF_Module {
 	function story_budget_filter_options( $select_id, $select_name, $filters ) {
 		switch( $select_id ) {
 			case 'post_status': 
-			$post_statuses = $this->get_post_statuses();
+			$post_stati = get_post_stati();
+			unset( $post_stati['inherit'], $post_stati['auto-draft'], $post_stati['trash'] );
 			?>
 				<select id="post_status" name="post_status"><!-- Status selectors -->
 						<option value=""><?php _e( 'View all statuses', 'edit-flow' ); ?></option>
 						<?php
-							foreach ( $post_statuses as $post_status ) {
-								echo "<option value='" . esc_attr( $post_status->slug ) . "' " . selected( $post_status->slug, $filters['post_status'] ) . ">" . esc_html( $post_status->name ) . "</option>";
+							foreach ( $post_stati as $post_status ) {
+								$value = $post_status;
+								$status = get_post_status_object($post_status)->label;
+								echo '<option value="' . esc_attr( $value ) . '" ' . selected( $value, $filters['post_status'] ) . '>' . esc_html( $status ) . '</option>';
 							}
-							echo "<option value='future'" . selected('future', $filters['post_status']) . ">" . __( 'Scheduled', 'edit-flow' ) . "</option>";
-							echo "<option value='unpublish'" . selected('unpublish', $filters['post_status']) . ">" . __( 'Unpublished', 'edit-flow' ) . "</option>";
-							echo "<option value='publish'" . selected('publish', $filters['post_status']) . ">" . __( 'Published', 'edit-flow' ) . "</option>";
+							echo '<option value="unpublish"' . selected('unpublish', $filters['post_status']) . '>' . __( 'Unpublished', 'edit-flow' ) . '</option>';
 						?>
 					</select>
 			<?php
