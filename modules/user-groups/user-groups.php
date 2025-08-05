@@ -1002,6 +1002,11 @@ class EF_User_Groups extends EF_Module {
 		
 		foreach( (array)$ids as $usergroup_id ) {
 			$usergroup = $this->get_usergroup_by( 'id', $usergroup_id );
+			
+			if (in_array($user_id, $usergroup->user_ids)) {
+				continue;
+			}
+			
 			$usergroup->user_ids[] = $user_id;
 			$retval = $this->update_usergroup( $usergroup_id, null, $usergroup->user_ids );
 			if ( is_wp_error( $retval ) )
