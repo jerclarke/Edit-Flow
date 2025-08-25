@@ -823,7 +823,7 @@ class EF_Calendar extends EF_Module {
 
 					$td_classes = apply_filters( 'ef_calendar_table_td_classes', $td_classes, $week_single_date );
 				?>
-				<td class="<?php echo esc_attr( implode( ' ', $td_classes ) ); ?>" id="<?php echo esc_attr( $week_single_date ); ?>">
+				<td class="<?php echo esc_attr( implode( ' ', $td_classes ) ); ?>" id="date-<?php echo esc_attr( $week_single_date ); ?>">
 					<button class='schedule-new-post-button'>+</button>
 					<?php if ( $week_single_date == date( 'Y-m-d', current_time( 'timestamp' ) ) ): ?>
 						<div class="day-unit-today"><?php esc_html_e( 'Today', 'edit-flow' ); ?></div>
