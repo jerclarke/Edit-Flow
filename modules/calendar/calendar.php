@@ -21,7 +21,7 @@ class EF_Calendar extends EF_Module {
 	var $max_visible_posts_per_date = 4; // total number of posts to be shown per square before 'more' link
 
 	private $post_date_cache = array();
-	private static $post_li_html_cache_key = 'ef_calendar_post_li_html';
+	private static $post_li_details_cache_key = 'ef_calendar_post_li_html';
 	private int $max_weeks;
 	private string $create_post_cap;
 
@@ -899,20 +899,31 @@ class EF_Calendar extends EF_Module {
 	 * @return str HTML for a single post item
 	 */
 	function generate_post_li_html( $post, $post_date, $num = 0 ){
+		
+		$user_can_modify_post = $this->current_user_can_modify_post( $post );
+		$cache_key = $this->get_post_li_cache_key( $post->ID );
 
-		$can_modify = ( $this->current_user_can_modify_post( $post ) ) ? 'can_modify' : 'read_only';
-		$cache_key = $post->ID . $can_modify . '_' . get_current_user_id();
-		$cache_val = wp_cache_get( $cache_key, self::$post_li_html_cache_key );
-		// Because $num is pertinent to the display of the post LI, need to make sure that's what's in cache
+		$cache_val = wp_cache_get( $cache_key, self::$post_li_details_cache_key );
+
+		$post_details = array();
+		
 		if ( is_array( $cache_val ) && $cache_val['num'] == $num ) {
 			$this->hidden = $cache_val['hidden'];
-			return $cache_val['post_li_html'];
+			$post_details = $cache_val['post_details'];
+		} else {
+			$post_details = $this->get_post_information_fields( $post );
+
+			$post_li_cache = array(
+				'num' => $num,
+				'post_details' => $post_details,
+				'hidden' => $this->hidden,
+			);
+
+			wp_cache_set( $cache_key, $post_li_cache, self::$post_li_details_cache_key );
 		}
 
-		ob_start();
-		$post_id = $post->ID;
-		$edit_post_link = get_edit_post_link( $post_id );
-		$status_object = get_post_status_object( get_post_status( $post_id ) );
+		$status_object = get_post_status_object( get_post_status( $post ) );
+
 
 		$post_classes = array(
 			'day-item',
@@ -921,7 +932,7 @@ class EF_Calendar extends EF_Module {
 		// Only allow the user to drag the post if they have permissions to
 		// or if it's in an approved post status
 		// This is checked on the ajax request too.
-		if ( $this->current_user_can_modify_post( $post ) && !in_array( $post->post_status, $this->published_statuses ) )
+		if ( $user_can_modify_post && !in_array( $post->post_status, $this->published_statuses ) )
 			$post_classes[] = 'sortable';
 
 		if ( in_array( $post->post_status, $this->published_statuses ) )
@@ -934,7 +945,10 @@ class EF_Calendar extends EF_Module {
 			$post_classes[] = 'hidden';
 			$this->hidden++;
 		}
+
 		$post_classes = apply_filters( 'ef_calendar_table_td_li_classes', $post_classes, $post_date, $post->ID );
+
+		ob_start();
 
 		?>
 		<li class="<?php echo esc_attr( implode( ' ', $post_classes ) ); ?>" id="post-<?php echo esc_attr( $post->ID ); ?>">
@@ -943,12 +957,63 @@ class EF_Calendar extends EF_Module {
 				<div class="item-default-visible">
 					<div class="item-status"><span class="status-text"><?php echo esc_html( $status_object->label ); ?></span></div>
 					<div class="inner">
-						<span class="item-headline post-title"><strong><?php echo esc_html( _draft_or_post_title( $post->ID ) ); ?></strong></span>
+						<span class="item-headline post-title"><strong><?php echo esc_html( _draft_or_post_title( $post ) ); ?></strong></span>
 					</div>
 					<?php do_action( 'ef_calendar_item_html', $post->ID ); ?>
 				</div>
 				<div class="item-inner">
-					<?php $this->get_inner_information( $this->get_post_information_fields( $post ), $post ); ?>
+					<table class="item-information">
+						<?php foreach( $post_details as $field => $values ): ?>
+							<tr class="item-field item-information-<?php echo esc_attr( $field ); ?>">
+								<th class="label"><?php echo esc_html( $values['label'] ); ?>:</th>
+								<?php if ( $values['value'] && isset($values['type']) ): ?>
+									<?php if( isset( $user_can_modify_post ) && $user_can_modify_post ) : ?>
+										<td class="value<?php if( $user_can_modify_post ) { ?> editable-value<?php } ?>"><?php echo esc_html( $values['value'] ); ?></td>
+										<?php if( $user_can_modify_post ): ?>
+											<td class="editable-html hidden" data-type="<?php echo esc_attr( $values['type'] ); ?>" data-metadataterm="<?php echo esc_attr( str_replace( 'editorial-metadata-', '', str_replace( 'tax_', '', $field ) ) ); ?>"><?php echo $this->get_editable_html( $values['type'], $values['value'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+
+										<?php endif; ?>
+									<?php else: ?>
+										<td class="value"><?php echo esc_html( $values['value'] ); ?></td>
+									<?php endif; ?>
+								<?php elseif( $values['value'] ): ?>
+									<td class="value"><?php echo esc_html( $values['value'] ); ?></td>
+								<?php else: ?>
+								<td class="value"><em class="none"><?php esc_html_e( 'None', 'edit-flow' ); ?></em></td>
+								<?php endif; ?>
+							</tr>
+						<?php endforeach; ?>
+						<?php do_action( 'ef_calendar_item_additional_html', $post->ID ); ?>
+					</table>
+					<?php
+						$item_actions = array();
+						if ( $this->current_user_can_modify_post( $post ) ) {
+							// Edit this post
+							$item_actions['edit'] = '<a href="' . get_edit_post_link( $post, true ) . '" title="' . esc_attr( __( 'Edit this item', 'edit-flow' ) ) . '">' . __( 'Edit', 'edit-flow' ) . '</a>';
+							// Trash this post
+							$item_actions['trash'] = '<a href="'. get_delete_post_link( $post ) . '" title="' . esc_attr( __( 'Trash this item' ), 'edit-flow' ) . '">' . __( 'Trash', 'edit-flow' ) . '</a>';
+							// Preview/view this post
+							if ( !in_array( $post->post_status, $this->published_statuses ) ) {
+								$item_actions['view'] = '<a href="' . esc_url( apply_filters( 'preview_post_link', add_query_arg( 'preview', 'true', get_permalink( $post ) ), $post ) ) . '" title="' . esc_attr( sprintf( __( 'Preview &#8220;%s&#8221;', 'edit-flow' ), $post->post_title ) ) . '" rel="permalink">' . __( 'Preview', 'edit-flow' ) . '</a>';
+							} elseif ( 'trash' != $post->post_status ) {
+								$item_actions['view'] = '<a href="' . get_permalink( $post ) . '" title="' . esc_attr( sprintf( __( 'View &#8220;%s&#8221;', 'edit-flow' ), $post->post_title ) ) . '" rel="permalink">' . __( 'View', 'edit-flow' ) . '</a>';
+							}
+							//Save metadata
+							$item_actions['save hidden'] = '<a href="#savemetadata" id="save-editorial-metadata" class="post-'. esc_attr( $post->ID ) .'" title="'. esc_attr( sprintf( __( 'Save &#8220;%s&#8221;', 'edit-flow' ), $post->post_title ) ) . '" >' . __( 'Save', 'edit-flow') . '</a>';
+						}
+						// Allow other plugins to add actions
+						$item_actions = apply_filters( 'ef_calendar_item_actions', $item_actions, $post->ID );
+						if ( count( $item_actions ) ) {
+							echo '<div class="item-actions">';
+							$html = '';
+							foreach ( $item_actions as $class => $item_action ) {
+								$html .= '<span class="' . esc_attr( $class ) . '">' . $item_action . ' | </span> '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+							}
+							echo rtrim( $html, '| ' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+							echo '</div>';
+						}
+					?>
+					<div style="clear:right;"></div>
 				</div>
 			</div>
 		</li>
@@ -957,16 +1022,19 @@ class EF_Calendar extends EF_Module {
 		$post_li_html = ob_get_contents();
 		ob_end_clean();
 
-		$post_li_cache = array(
-			'num' => $num,
-			'post_li_html' => $post_li_html,
-			'hidden' => $this->hidden,
-			);
-		wp_cache_set( $cache_key, $post_li_cache, self::$post_li_html_cache_key );
-
 		return $post_li_html;
 
 	} // generate_post_li_html()
+
+	/**
+	 * Returns the cache key for the post li cache
+	 * @param  int $post_id The id of the post
+	 *
+	 * @return str The cache key
+	 */
+	function get_post_li_cache_key( $post_id ) {
+		return 'ef_calendar_post_details_' . $post_id;
+	}
 
 	/**
 	 * get_inner_information description
@@ -1727,8 +1795,7 @@ class EF_Calendar extends EF_Module {
 	 */
 	public function action_clean_li_html_cache( $post_id ) {
 
-		wp_cache_delete( $post_id . 'can_modify', self::$post_li_html_cache_key );
-		wp_cache_delete( $post_id . 'read_only', self::$post_li_html_cache_key );
+		wp_cache_delete( $this->get_post_li_cache_key( $post_id ), self::$post_li_details_cache_key );
 	}
 
 	/**
