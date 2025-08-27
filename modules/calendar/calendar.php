@@ -1069,9 +1069,6 @@ class EF_Calendar extends EF_Module {
 			case 'taxonomy':
 				return '<input type="text" class="metadata-edit-' . esc_attr( $type ) . '" value="' . esc_attr( $value ) . '" />';
 			break;
-			case 'taxonomy hierarchical':
-				return wp_dropdown_categories( array( 'echo' => 0, 'hide_empty' => 0 ) );
-			break;
 		}
 	}
 
@@ -1143,25 +1140,27 @@ class EF_Calendar extends EF_Module {
 			} else {
 				$value = '';
 			}
-			 //Used when editing editorial metadata and post meta
-			if ( is_taxonomy_hierarchical( $taxonomy->name ) )
-				$type = 'taxonomy hierarchical';
-			else
-				$type = 'taxonomy';
 
 			$information_fields[$key] = array(
 				'label' => $taxonomy->label,
 				'value' => $value,
-				'type' => $type,
 			);
 
-			if( $post->post_type == 'page' )
-				$ed_cap = 'edit_page';
-			else
-				$ed_cap = 'edit_post';
+			if ( is_taxonomy_hierarchical( $taxonomy->name ) ) {
+				$information_fields[$key]['type'] = 'taxonomy hierarchical';
+			} else {
+				$information_fields[$key]['type'] = 'taxonomy';
+				
+				if( $post->post_type == 'page' ) {
+					$ed_cap = 'edit_page';
+				} else {
+					$ed_cap = 'edit_post';
+				}
 
-			if( current_user_can( $ed_cap, $post->ID ) )
-				$information_fields[$key]['editable'] = true;
+				if( current_user_can( $ed_cap, $post->ID ) ) {
+					$information_fields[$key]['editable'] = true;
+				}
+			}
 		}
 
 		$information_fields = apply_filters( 'ef_calendar_item_information_fields', $information_fields, $post->ID );
@@ -1642,7 +1641,6 @@ class EF_Calendar extends EF_Module {
 		} else {
 			switch( $_POST['metadata_type'] ) {
 				case 'taxonomy':
-				case 'taxonomy hierarchical':
 					$response = wp_set_post_terms( $post->ID, $incoming_metadata_value, $metadata_term );
 				break;
 				default:
